@@ -1,0 +1,189 @@
+---
+title: "Practical Machine Learning Final Project"
+author: "Alva Presbitero"
+date: "9/27/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Practical Machine Learning Final Project
+
+**Background**
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+**Data**
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+
+## Reading the Data
+
+Import necessary libraries.
+
+```{r}
+library(RCurl)
+library(caret)
+```
+Then we import and read the data. Since the data given is a url, we can easily
+import the data like so. We read the csv file using the read.csv command. Then 
+we store the data in the trainng and testing variables as dataframes.
+
+```{r}
+url_train <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url_test <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+training <- read.csv(url_train)
+testing <- read.csv(url_test)
+```
+For sanity check, we look at the dimensions of the dataframes for the training and test data sets that we have just read.
+
+```{r}
+dim(training); dim(testing);
+
+View(training); View(testing);
+```
+
+As well as the distributions of the classes being predicted. I plot them below:
+```{r}
+plot(training$classe, col="yellow", main="Frequency Distributions of Classes", xlab="classe levels", ylab="Frequency")
+
+```
+
+## Cleaning the Data
+
+Next we remove all columns with zero variance, meaning those columns
+that contain only a single value. These features will turn out to be useless in 
+training as they do not carry information for prediction.
+
+```{r}
+nzv_cols <- nearZeroVar(training)
+if(length(nzv_cols) > 0) training <- training[, -nzv_cols]
+if(length(nzv_cols) > 0) testing <- testing[, -nzv_cols]
+```
+We also remove all columns containing NAs.
+
+```{r}
+na_names_cols <- names(training)[sapply(training, anyNA)]
+testing <- testing[ , -which(names(testing) %in% na_names_cols)]
+training <- training[ , -which(names(training) %in% na_names_cols)]
+```
+
+Finally, we pinpoint columns that obviously do not relate to the class predictions.
+These are the first 8 columns in the dataset which I have identified as the following
+columns:
+
+
+```{r}
+delete_cols <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", "cvtd_timestamp", "new_window", "num_window")
+training <- training[ , -which(names(training) %in% delete_cols)]
+testing <- testing[ , -which(names(testing) %in% delete_cols)]
+```
+For another sanity check, I look into the dimensions of my cleaned training and test set.
+
+```{r}
+dim(training); dim(testing)
+```
+## Data Splitting
+
+I then partition my training data set into 60% training and 40% validation.
+
+```{r}
+set.seed(100)
+inTrain <- createDataPartition(y=training$classe, p=0.6, list=FALSE)
+training_set <- training[inTrain, ]
+validation_set <- training[-inTrain, ]
+```
+## Training and Validating the Ensemble Model
+
+For this project, I will be using an ensemble model called stacking. I will be using three commonly used machine learning models such as gradient boosting method, random forest, 
+and linear discriminant analysis. 
+
+I establish each of my individual models by training each model to the training set. I save these models as an rds file so that I would not have to call them again, just in case.
+
+```{r}
+set.seed(100)
+# Random Forest
+mod_rf <- train(classe ~., data = training_set, method = "rf")
+saveRDS(mod_rf, "mod_rf.rds")
+mod_rf <- readRDS("mod_rf.rds")
+
+# Gradient Boost Method
+mod_gbm <- train(classe ~., data = training_set, method = "gbm")
+saveRDS(mod_gbm, "mod_gbm.rds")
+mod_gbm <- readRDS("mod_gbm.rds")
+
+# Linear Discriminant Analysis
+mod_lda <- train(classe ~., data = training_set, method = "lda")
+saveRDS(mod_lda, "mod_lda.rds")
+mod_lda <- readRDS("mod_lda.rds")
+```
+
+In order to effectively compare how individual models perform compared with the ensemble, I look at the accuracy of each model as shown below:
+
+```{r}
+pred_rf <- predict(mod_rf, newdata = validation_set)
+pred_gbm <- predict(mod_gbm, newdata = validation_set)
+pred_lda <- predict(mod_lda, newdata = validation_set)
+
+confusionMatrix(pred_rf, validation_set$classe)
+confusionMatrix(pred_gbm, validation_set$classe)
+confusionMatrix(pred_lda, validation_set$classe)
+
+confusionMatrix(pred_rf, validation_set$classe)$overall[1]
+confusionMatrix(pred_gbm, validation_set$classe)$overall[1]
+confusionMatrix(pred_lda, validation_set$classe)$overall[1]
+```
+
+I then generate a level-one dataset for training the ensemble metalearner, train the ensemble metalearner with the generated level-one training dataset, and save the stack model to an rds file. Again, so that I would not have to run it again just in case.
+
+```{r}
+# Generate a level-one dataset for training the ensemble metalearner
+predDF <- data.frame(pred_rf, pred_gbm, pred_lda, classe = validation_set$classe, stringsAsFactors = F)
+
+# Train the ensemble
+set.seed(100)
+modelStack <- train(classe ~ ., data = predDF, method = "rf")
+saveRDS(modelStack, "modelStack.rds")
+modelStack <- readRDS("modelStack.rds")
+```
+
+To compare how the ensemble metalearner pans with the predictive power of individual models,  I look at the accuracy of the predicted classes of the metalearner. So it looks like the ensemble metalearner's predictive power is at par with the random forest. This makes sense tho, because the accuracy using random forest is already high.
+
+```{r}
+modelPred <- predict(modelStack, newdata = predDF)
+confusionMatrix(modelPred, predDF$classe)
+confusionMatrix(modelPred, predDF$classe)$overall[1]
+```
+
+Next, I generate predictions on the test set. Note that I'm using the same names because R has this weird rule that the each column name should be exactly the same as what was used in training the ensemble model. 
+
+```{r}
+pred_rf <- predict(mod_rf, newdata = testing)
+pred_gbm <- predict(mod_gbm, newdata = testing)
+pred_lda <- predict(mod_lda, newdata = testing)
+
+testPredLevelOne <- data.frame(pred_rf, pred_gbm, pred_lda, stringsAsFactors = F)
+```
+
+Now I'm ready to predict!
+
+## Predicting Using the Trained Ensemble Model
+
+```{r}
+for (j in 1:20) {
+  p <- predict(modelStack, testPredLevelOne[j,])
+  print(p)
+}
+```
